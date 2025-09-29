@@ -270,7 +270,7 @@ export default function DoctorPatientDashboard() {
                   onClick={() =>
                     activeSection
                       ? setActiveSection(null)
-                      : navigate("/dashboard")
+                      : navigate("/DoctorDashboard")
                   }
                   className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-brand-600 dark:hover:text-brand-400 mb-2"
                 >

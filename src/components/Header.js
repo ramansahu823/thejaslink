@@ -19,7 +19,7 @@ export default function Header() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
         <div className="h-16 flex items-center justify-between gap-4">
           {/* Logo */}
-          <a href="#/" className="flex items-center gap-3 group">
+          <a href="Home" className="flex items-center gap-3 group">
             <div className="relative">
               {/* Simple medical cross in a circle */}
               <svg width="36" height="36" viewBox="0 0 48 48" fill="none" className="drop-shadow-sm">
