@@ -5,6 +5,7 @@ import { useTranslation } from '../utils/translations';
 import { motion } from 'framer-motion';
 import { registerPatient, checkAadhaarAlreadyRegistered } from '../services/authService';
 
+
 export default function PatientRegistration() {
   const navigate = useNavigate();
   const { state, actions } = useApp();

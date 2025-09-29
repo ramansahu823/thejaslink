@@ -7,9 +7,12 @@ import PatientLogin from './components/PatientLogin';
 import PatientRegistration from './components/PatientRegistration';
 import DoctorRegistration from './components/DoctorRegistration';
 import DoctorLogin from './components/DoctorLogin';
-import Dashboard from './components/Dashboard';
+import DoctorDashboard from './pages/DoctorDashboard';
 import PatientDashboard from './pages/PatientDashboard';
 import SuccessPage from './pages/SuccessPage';
+import DoctorSuccessPage from './pages/DoctorSuccessPage';
+import DoctorPatientDashboard from './pages/DoctorPatientDashboard';
+import TodayEntry from './pages/TodayEntry';
 
 function App() {
   return (
@@ -31,9 +34,13 @@ function App() {
               <Route path="/doctor-registration" element={<DoctorRegistration />} />
               <Route path="/patient-registration" element={<PatientRegistration />} />
               <Route path="/success" element={<SuccessPage />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/doctorDashboard" element={<DoctorDashboard />} />
               <Route path="/patient-dashboard" element={<PatientDashboard />} />
               <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="/doctor-success" element={<DoctorSuccessPage />} />
+              <Route path="/doctor-patient-dashboard" element={<DoctorPatientDashboard />} />
+              <Route path="/doctor/patient/:patientId" element={<DoctorPatientDashboard />} />
+              <Route path="/today-entry/:patientId" element={<TodayEntry />} />
             </Routes>
           </main>
           

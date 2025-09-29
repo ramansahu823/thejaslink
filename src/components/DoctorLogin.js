@@ -64,6 +64,8 @@ export default function DoctorLogin() {
     return Object.keys(newErrors).length === 0;
   };
 
+ // DoctorLogin.js
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -72,15 +74,23 @@ export default function DoctorLogin() {
     }
 
     setSubmitError('');
+    // ...
     setIsSubmitting(true);
     try {
+      // --- START: इस ब्लॉक को हटा दें ---
       // We require email login; if provided phone/license, show error
       if (!formData.credentials.includes('@')) {
         throw new Error('Please use your email to sign in');
       }
+      // --- END: इस ब्लॉक को हटा दें ---
       const profile = await loginDoctor(formData.credentials.trim(), formData.password);
+
       actions.setUser({ ...profile, role: 'doctor' });
-      navigate('/dashboard');
+      
+      // --- START: इस लाइन को बदलें ---
+      navigate('/DoctorDashboard'); // सही URL
+      // --- END: इस लाइन को बदलें ---
+
     } catch (err) {
       setSubmitError(err?.message || 'Failed to sign in');
     } finally {

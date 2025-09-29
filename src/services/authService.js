@@ -61,27 +61,6 @@ async function generateUniquePatientId(aadharNumber) {
   return patientId;
 }
 
-export async function registerDoctor(email, password, profile) {
-  assertNonEmpty(email, 'Email');
-  assertNonEmpty(password, 'Password');
-  const cred = await createUserWithEmailAndPassword(auth, email, password);
-  const uid = cred.user.uid;
-  const ref = doc(db, 'doctors', uid);
-  await setDoc(ref, { uid, email, ...profile, createdAt: Date.now() });
-  return uid;
-}
-
-export async function loginDoctor(email, password) {
-  const cred = await signInWithEmailAndPassword(auth, email, password);
-  const uid = cred.user.uid;
-  const ref = doc(db, 'doctors', uid);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    throw new Error('Doctor profile not found');
-  }
-  return { uid, ...snap.data() };
-}
-
 export async function registerPatient(email, password, profile) {
   assertNonEmpty(email, 'Email');
   assertNonEmpty(password, 'Password');
@@ -331,3 +310,100 @@ export async function verifyAadhaar(aadharNumber, fullName, dateOfBirth) {
     };
   }
 }
+// ====== NAYA DOCTOR AUTHENTICATION CODE START ======
+
+// Naya helper function: Check karega ki doctor pehle se registered hai ya nahi
+export async function isDoctorAlreadyRegistered(licenseId) {
+  const q = query(collection(db, 'doctors'), where('medicalLicenseId', '==', licenseId));
+  const snapshot = await getDocs(q);
+  return !snapshot.empty;
+}
+
+// Puraane 'registerDoctor' function ko isse replace karein
+export async function registerDoctor(email, password, profile) {
+  assertNonEmpty(email, 'Email');
+  assertNonEmpty(password, 'Password');
+  
+  // Step 1: Check karein ki is license se koi aur account toh nahi hai
+  const alreadyExists = await isDoctorAlreadyRegistered(profile.medicalLicenseId);
+  if (alreadyExists) {
+    throw new Error('A doctor with this Medical License ID is already registered.');
+  }
+
+  // Step 2: Naya Firebase Auth user banayein
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  const uid = cred.user.uid;
+  const ref = doc(db, 'doctors', uid);
+  
+  // Step 3: Doctor ka profile Firestore mein save karein
+  // Hum yahan phone aur license ID bhi save kar rahe hain taaki login mein kaam aaye
+  await setDoc(ref, { 
+    uid, 
+    email: email.trim(), 
+    name: profile.name,
+    dateOfBirth: profile.dateOfBirth,
+    aadhar: profile.aadhar,
+    medicalLicenseId: profile.medicalLicenseId,
+    phone: profile.phone,
+    role: 'doctor',
+    createdAt: new Date() 
+  });
+  
+  return uid;
+}
+
+// Puraane 'loginDoctor' function ko isse replace karein
+export async function loginDoctor(credentials, password) {
+  assertNonEmpty(credentials, 'Credentials');
+  assertNonEmpty(password, 'Password');
+  
+  const trimmedCredentials = credentials.trim();
+  let userEmail = '';
+
+  // Step 1: User ka email pata lagayein
+  if (trimmedCredentials.includes('@')) {
+    // Agar user ne email daala hai, toh seedhe use karein
+    userEmail = trimmedCredentials;
+  } else {
+    // Agar user ne phone ya license ID daala hai, toh 'doctors' collection se email dhoondein
+    const doctorsRef = collection(db, 'doctors');
+    
+    // Alag-alag fields par query karke dekhein
+    const phoneQuery = query(doctorsRef, where('phone', '==', trimmedCredentials));
+    const licenseQuery = query(doctorsRef, where('medicalLicenseId', '==', trimmedCredentials));
+    
+    // Dono query ek saath run karein
+    const [phoneSnapshot, licenseSnapshot] = await Promise.all([
+      getDocs(phoneQuery),
+      getDocs(licenseQuery)
+    ]);
+
+    if (!phoneSnapshot.empty) {
+      userEmail = phoneSnapshot.docs[0].data().email;
+    } else if (!licenseSnapshot.empty) {
+      userEmail = licenseSnapshot.docs[0].data().email;
+    } else {
+      // Agar kuch nahi milta hai, toh error dein
+      throw new Error('Doctor with these credentials not found.');
+    }
+  }
+
+  if (!userEmail) {
+    throw new Error('Could not verify your credentials.');
+  }
+
+  // Step 2: Asli email aur password se Firebase Auth mein sign in karein
+  const cred = await signInWithEmailAndPassword(auth, userEmail, password);
+  const uid = cred.user.uid;
+  const ref = doc(db, 'doctors', uid);
+  const snap = await getDoc(ref);
+  
+  if (!snap.exists()) {
+    throw new Error('Doctor profile not found after login.');
+  }
+  
+  // Login successful hone par poora profile return karein
+  return { uid, ...snap.data() };
+}
+
+// ====== NAYA DOCTOR AUTHENTICATION CODE END ======

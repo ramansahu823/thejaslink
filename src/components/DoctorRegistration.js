@@ -130,6 +130,8 @@ export default function DoctorRegistration() {
     return Object.keys(newErrors).length === 0;
   };
 
+  // DoctorRegistration.js
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -164,14 +166,20 @@ export default function DoctorRegistration() {
       await registerDoctor(formData.email.trim(), formData.password, profile);
       actions.setUser({ ...profile, email: formData.email.trim() });
       setSubmitSuccess('Account created successfully');
-      navigate('/success', { state: { userType: 'doctor' } });
+      
+      // Change this line to navigate to the new success page
+      navigate('/doctor-success'); // Changed from '/success'
+
     } catch (err) {
-      setSubmitError(err?.message || 'Failed to create account');
+      // --- START: यह कोड जोड़ें ---
+      setSubmitError(err?.message || 'Failed to create account. Please try again.');
+      // --- END: यह कोड जोड़ें ---
     } finally {
-      setIsSubmitting(false);
+        // --- START: यह कोड जोड़ें ---
+        setIsSubmitting(false);
+        // --- END: यह कोड जोड़ें ---
     }
   };
-
   const handleBackToSignIn = () => {
     navigate('/doctor-signin');
   };
@@ -390,22 +398,22 @@ export default function DoctorRegistration() {
                   }`}
                 />
                 {errors.medicalLicenseId && (
-                  <motion.p 
+                  <motion.div 
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="text-red-500 text-sm mt-1"
                   >
                     {errors.medicalLicenseId}
-                  </motion.p>
+                  </motion.div>
                 )}
                 {validations.license !== null && !errors.medicalLicenseId && (
-                  <motion.p 
+                  <motion.div 
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     className={validations.license ? "text-green-500 text-sm mt-1" : "text-red-500 text-sm mt-1"}
                   >
                     {validations.license ? "✅ License is valid" : "❌ License not found"}
-                  </motion.p>
+                  </motion.div>
                 )}
               </div>
             </div>

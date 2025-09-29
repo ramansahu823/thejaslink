@@ -8,11 +8,14 @@ import { logout } from '../services/authService';
 import {
   doc,
   getDoc,
-  onSnapshot,
   setDoc,
   collection,
   addDoc,
-  getDocs
+  getDocs,
+  updateDoc,
+  query,
+  where,
+  orderBy
 } from 'firebase/firestore';    
 import { ref, uploadBytes, getDownloadURL, listAll } from 'firebase/storage';
 import { 
@@ -21,8 +24,23 @@ import {
   Settings, 
   QrCode,
   Download,
-  Copy
+  Copy,
+  Menu,
+  X
 } from 'lucide-react';
+import QRCode from 'qrcode';
+
+// Import Firebase service functions
+import {
+  getPatientProfile,
+  updatePatientProfile,
+  getPatientAppointments,
+  getPatientPrescriptions,
+  getPatientLabReports,
+  getPatientVaccinations,
+  getDoctorNotes,
+  getAllPatientData
+} from '../services/patientFirebaseService';
 
 // Section Components
 import PersonalDetails from '../components/patient/PersonalDetails';
@@ -39,17 +57,17 @@ import NearbyHospitals from '../components/patient/NearbyHospitals';
 import HealthSummaryButton from '../components/patient/HealthSummaryButton';
 
 const sections = [
-  { key: 'personal', label: 'Personal Details' },
-  { key: 'medical', label: 'Medical History' },
-  { key: 'reports', label: 'Lab Reports & Tests' },
-  { key: 'prescriptions', label: 'Prescriptions' },
-  { key: 'chronic', label: 'Chronic Diseases' },
-  { key: 'appointments', label: 'Upcoming Appointments' },
-  { key: 'vaccinations', label: 'Vaccination Records' },
-  { key: 'notes', label: 'Doctor Notes' },
-  { key: 'emergency', label: 'Emergency Info' },
-  { key: 'qrcode', label: 'QR Code' },
-  { key: 'nearby', label: 'Nearby Hospitals' }
+  { key: 'personal', label: 'Personal Details', icon: '👤' },
+  { key: 'medical', label: 'Medical History', icon: '📋' },
+  { key: 'reports', label: 'Lab Reports & Tests', icon: '🔬' },
+  { key: 'prescriptions', label: 'Prescriptions', icon: '💊' },
+  { key: 'chronic', label: 'Chronic Diseases', icon: '❤️' },
+  { key: 'appointments', label: 'Upcoming Appointments', icon: '📅' },
+  { key: 'vaccinations', label: 'Vaccination Records', icon: '💉' },
+  { key: 'notes', label: 'Doctor Notes', icon: '📝' },
+  { key: 'emergency', label: 'Emergency Info', icon: '🚨' },
+  { key: 'qrcode', label: 'QR Code', icon: '🔳' },
+  { key: 'nearby', label: 'Nearby Hospitals', icon: '🏥' }
 ];
 
 export default function PatientDashboard() {
@@ -59,6 +77,7 @@ export default function PatientDashboard() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState(null);
+  const [patientData, setPatientData] = useState(null);
   const [reports, setReports] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
   const [appointments, setAppointments] = useState([]);
@@ -66,113 +85,377 @@ export default function PatientDashboard() {
   const [vaccinations, setVaccinations] = useState([]);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [dataLoadError, setDataLoadError] = useState(null);
 
   const uid = state?.user?.uid;
   const role = state?.user?.role;
   const currentUser = state?.user;
 
-  // Extract patient information with fallbacks
+  // Get patient ID - from registration or UID-based
+  const getPatientId = () => {
+    if (currentUser?.patientId) return currentUser.patientId;
+    if (profile?.patientId) return profile.patientId;
+    return uid?.substring(0, 10) || 'Not Available';
+  };
+
+  const patientId = getPatientId();
+
+  // Extract patient information with better fallbacks
   const getPatientInfo = () => {
-    if (!profile && !currentUser) return { name: '', email: '', patientId: '', personalDetails: {} };
+    if (!profile && !currentUser) {
+      return { 
+        name: 'Patient', 
+        email: '', 
+        patientId: 'Not Available', 
+        phone: '',
+        aadhar: '',
+        dob: '',
+        gender: '',
+        bloodGroup: '',
+        address: '',
+        personalDetails: {} 
+      };
+    }
     
     const data = profile || currentUser;
-    const personalDetails = data.personalDetails || {};
+    
+    // Handle different data structures
+    const personalDetails = data.personalDetails || data || {};
     
     return {
-      name: personalDetails.name || personalDetails.fullName || data.name || 'Patient',
+      name: personalDetails.name || personalDetails.fullName || data.displayName || 'Patient',
       email: personalDetails.email || data.email || '',
-      patientId: data.patientId || 'Not Available',
-      phone: personalDetails.phone || personalDetails.phoneNumber || '',
+      patientId: patientId,
+      phone: personalDetails.phone || personalDetails.phoneNumber || data.phoneNumber || '',
       aadhar: personalDetails.aadhar || personalDetails.aadhaar || personalDetails.aadharNumber || '',
       dob: personalDetails.dateOfBirth || personalDetails.dob || '',
       gender: personalDetails.gender || '',
+      bloodGroup: personalDetails.bloodGroup || personalDetails.bloodType || '',
+      address: personalDetails.address || personalDetails.fullAddress || '',
       personalDetails: personalDetails
     };
   };
 
   const patientInfo = getPatientInfo();
 
+  // Generate QR Code
+  const generateQRCode = async () => {
+    try {
+      const qrData = JSON.stringify({
+        type: 'patient',
+        patientId: patientInfo.patientId,
+        name: patientInfo.name,
+        emergencyContact: profile?.emergency?.contactPhone || null,
+        bloodGroup: patientInfo.bloodGroup || null,
+        allergies: profile?.medicalHistory?.allergies || [],
+        system: "ThejasLink Health Records",
+        timestamp: new Date().toISOString()
+      });
+      
+      const url = await QRCode.toDataURL(qrData, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#2a8dff',
+          light: '#ffffff'
+        }
+      });
+      setQrCodeUrl(url);
+    } catch (err) {
+      console.error('Error generating QR code:', err);
+      // Fallback to simple QR code
+      const canvas = document.createElement('canvas');
+      canvas.width = 300;
+      canvas.height = 300;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#2a8dff';
+      ctx.fillRect(0, 0, 300, 300);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '20px Arial';
+      ctx.fillText('PATIENT ID', 80, 150);
+      ctx.fillText(patientInfo.patientId, 100, 180);
+      setQrCodeUrl(canvas.toDataURL());
+    }
+  };
+
   useEffect(() => {
     if (!uid || role !== 'patient') {
-      navigate('/patient-signin');
+      navigate('/patient-login');
       return;
     }
 
-    // Demo mode: if UID is a synthetic demo id, skip Firebase reads
-    if (String(uid).startsWith('demo_')) {
-      setProfile(currentUser || { uid });
-      setLoading(false);
-      return;
-    }
+    const loadPatientData = async () => {
+      try {
+        setLoading(true);
+        setDataLoadError(null);
 
-    const refDoc = doc(db, 'patients', uid);
-    const unsub = onSnapshot(refDoc, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setProfile({ uid, ...data });
+        // Demo mode handling
+        if (String(uid).startsWith('demo_')) {
+          const demoData = {
+            uid,
+            name: 'AMAN SAHU',
+            email: 'aman@gmail.com',
+            patientId: '3952995353',
+            personalDetails: {
+              name: 'AMAN SAHU',
+              aadhar: 'XXXX-XXXX-XXXX-1234',
+              bloodGroup: 'B+',
+              phone: '+91 9876543210',
+              dob: '15/03/1990',
+              gender: 'Male',
+              address: 'Kerala, India',
+              email: 'aman@gmail.com'
+            },
+            medicalHistory: {
+              allergies: ['Penicillin'],
+              illnesses: [],
+              surgeries: [],
+              familyHistory: [],
+              medications: []
+            },
+            chronic: {
+              bp: 'Normal',
+              diabetes: 'Not monitored',
+              cholesterol: 'Not tested'
+            }
+          };
+          setProfile(demoData);
+          setPatientData({
+            profile: demoData,
+            appointments: [],
+            prescriptions: [],
+            labReports: [],
+            vaccinations: [],
+            doctorNotes: []
+          });
+          setLoading(false);
+          return;
+        }
+
+        // Use patient ID for Firebase queries
+        const currentPatientId = patientId;
+        
+        if (currentPatientId && currentPatientId !== 'Not Available') {
+          try {
+            // Try to load using new Firebase service functions
+            const allData = await getAllPatientData(currentPatientId);
+            setProfile(allData.profile);
+            setPatientData(allData);
+            setPrescriptions(allData.prescriptions || []);
+            setAppointments(allData.appointments || []);
+            setNotes(allData.doctorNotes || []);
+            setVaccinations(allData.vaccinations || []);
+            setReports(allData.labReports || []);
+          } catch (firebaseServiceError) {
+            console.log('New Firebase service failed, trying legacy method:', firebaseServiceError);
+            
+            // Fallback to legacy Firebase loading
+            await loadLegacyPatientData();
+          }
+        } else {
+          // Create new patient profile if no patient ID
+          await createNewPatientProfile();
+        }
+
+      } catch (error) {
+        console.error('Error loading patient data:', error);
+        setDataLoadError(error.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadPatientData();
+  }, [uid, role, navigate, currentUser, patientId]);
+
+  // Legacy Firebase loading method (your original code)
+  const loadLegacyPatientData = async () => {
+    try {
+      const patientDocRef = doc(db, 'patients', uid);
+      const patientSnap = await getDoc(patientDocRef);
+
+      if (patientSnap.exists()) {
+        const patientData = patientSnap.data();
+        setProfile({ uid, ...patientData });
       } else {
-        // If no profile exists, use the current user data
-        setProfile(currentUser || { uid });
+        await createNewPatientProfile();
       }
-      setLoading(false);
-    });
 
-    // Load subcollections (prescriptions, appointments, notes, vaccinations)
-    (async () => {
-      try {
-        const basePath = doc(db, 'patients', uid);
-        const presSnap = await getDocs(collection(basePath, 'prescriptions'));
-        setPrescriptions(presSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        const appSnap = await getDocs(collection(basePath, 'appointments'));
-        setAppointments(appSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        const noteSnap = await getDocs(collection(basePath, 'notes'));
-        setNotes(noteSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        const vaccSnap = await getDocs(collection(basePath, 'vaccinations'));
-        setVaccinations(vaccSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (e) {
-        // fallback silently
-        console.log('Error loading subcollections:', e);
-      }
-    })();
+      // Load subcollections using legacy method
+      await loadSubcollections(uid);
+    } catch (error) {
+      console.error('Legacy loading failed:', error);
+      throw error;
+    }
+  };
 
-    // Load storage-based report list
-    (async () => {
-      try {
-        const folder = ref(storage, `patients/${uid}/reports`);
-        const listed = await listAll(folder);
-        const files = await Promise.all(listed.items.map(async (itemRef) => {
+  // Create new patient profile
+  const createNewPatientProfile = async () => {
+    const newPatientId = generatePatientId();
+    const initialData = {
+      uid,
+      email: currentUser?.email || '',
+      name: currentUser?.displayName || 'Patient',
+      patientId: newPatientId,
+      personalDetails: {
+        name: currentUser?.displayName || 'Patient',
+        email: currentUser?.email || '',
+        phone: '',
+        aadhar: '',
+        dob: '',
+        gender: '',
+        bloodGroup: '',
+        address: ''
+      },
+      medicalHistory: {
+        allergies: [],
+        illnesses: [],
+        surgeries: [],
+        familyHistory: [],
+        medications: []
+      },
+      chronic: {
+        bp: 'Not monitored',
+        diabetes: 'Not monitored',
+        cholesterol: 'Not tested'
+      },
+      emergency: {
+        contactName: '',
+        contactPhone: ''
+      },
+      createdAt: new Date()
+    };
+    
+    // Save using both methods for compatibility
+    try {
+      // Save to patients collection with UID as document ID
+      await setDoc(doc(db, 'patients', uid), initialData);
+      
+      // Also save with patientId as document ID for new system
+      await setDoc(doc(db, 'patients', newPatientId), initialData);
+      
+      setProfile(initialData);
+    } catch (error) {
+      console.error('Error creating patient profile:', error);
+      throw error;
+    }
+  };
+
+  const loadSubcollections = async (patientUid) => {
+    try {
+      const basePath = `patients/${patientUid}`;
+      
+      // Load prescriptions
+      const presSnap = await getDocs(collection(db, basePath, 'prescriptions'));
+      setPrescriptions(presSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+      // Load appointments
+      const appSnap = await getDocs(collection(db, basePath, 'appointments'));
+      setAppointments(appSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+      // Load notes
+      const noteSnap = await getDocs(collection(db, basePath, 'notes'));
+      setNotes(noteSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+      // Load vaccinations
+      const vaccSnap = await getDocs(collection(db, basePath, 'vaccinations'));
+      setVaccinations(vaccSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+      // Load reports from storage
+      await loadReportsFromStorage(patientUid);
+
+    } catch (error) {
+      console.error('Error loading subcollections:', error);
+    }
+  };
+
+  const loadReportsFromStorage = async (patientUid) => {
+    try {
+      const reportsRef = ref(storage, `patients/${patientUid}/reports`);
+      const listed = await listAll(reportsRef);
+      const files = await Promise.all(
+        listed.items.map(async (itemRef) => {
           const url = await getDownloadURL(itemRef);
-          return { name: itemRef.name, url, fullPath: itemRef.fullPath };
-        }));
-        setReports(files.sort((a, b) => (a.name < b.name ? 1 : -1)));
-      } catch (e) {
-        // no files yet
-        console.log('Error loading reports:', e);
-      }
-    })();
+          return { 
+            name: itemRef.name, 
+            url, 
+            fullPath: itemRef.fullPath,
+            uploadedAt: new Date().toISOString(),
+            category: 'Uploaded Report',
+            status: 'available'
+          };
+        })
+      );
+      setReports(files.sort((a, b) => b.name.localeCompare(a.name)));
+    } catch (error) {
+      console.log('No reports found or error loading reports:', error);
+    }
+  };
 
-    return () => unsub();
-  }, [uid, role, navigate, currentUser]);
+  const generatePatientId = () => {
+    return Math.floor(1000000000 + Math.random() * 9000000000).toString();
+  };
 
-  const handleUpdateContact = async (partial) => {
-    if (!uid) return;
+  // Enhanced update function using new Firebase service
+  const handleUpdateContact = async (updatedData) => {
+    if (!patientId || patientId === 'Not Available') return;
+    
     setSaving(true);
     try {
-      const refDoc = doc(db, 'patients', uid);
-      const current = (await getDoc(refDoc)).data() || {};
+      // Use new Firebase service function
+      await updatePatientProfile(patientId, {
+        personalDetails: updatedData,
+        updatedAt: new Date()
+      });
       
-      // Update personal details properly
-      const updatedData = {
-        ...current,
+      // Update local state
+      setProfile(prev => ({
+        ...prev,
         personalDetails: {
-          ...current.personalDetails,
-          ...partial
+          ...prev?.personalDetails,
+          ...updatedData
         }
-      };
+      }));
       
-      await setDoc(refDoc, updatedData, { merge: true });
+      // Also update patientData if it exists
+      if (patientData) {
+        setPatientData(prev => ({
+          ...prev,
+          profile: {
+            ...prev?.profile,
+            personalDetails: {
+              ...prev?.profile?.personalDetails,
+              ...updatedData
+            }
+          }
+        }));
+      }
+      
     } catch (error) {
       console.error('Error updating profile:', error);
+      
+      // Fallback to legacy method
+      try {
+        const patientDocRef = doc(db, 'patients', uid);
+        const currentData = (await getDoc(patientDocRef)).data() || {};
+        
+        const newData = {
+          ...currentData,
+          personalDetails: {
+            ...currentData.personalDetails,
+            ...updatedData
+          },
+          updatedAt: new Date()
+        };
+        
+        await updateDoc(patientDocRef, newData);
+        setProfile(prev => ({ ...prev, ...newData }));
+      } catch (legacyError) {
+        console.error('Legacy update also failed:', legacyError);
+        alert('Error updating profile. Please try again.');
+      }
     } finally {
       setSaving(false);
     }
@@ -180,131 +463,195 @@ export default function PatientDashboard() {
 
   const handleReportUpload = async (file) => {
     if (!uid || !file) return;
+    
     if (String(uid).startsWith('demo_')) {
-      alert('Uploads are disabled in demo mode.');
+      alert('File upload is disabled in demo mode.');
       return;
     }
-    const ts = Date.now();
-    const safeName = file.name.replace(/\s+/g, '_');
-    const fileRef = ref(storage, `patients/${uid}/reports/${ts}_${safeName}`);
-    await uploadBytes(fileRef, file);
-    const url = await getDownloadURL(fileRef);
-    setReports(prev => [{ name: `${ts}_${safeName}`, url, fullPath: fileRef.fullPath }, ...prev]);
+    
     try {
-      await addDoc(collection(db, 'patients', uid, 'reports'), { 
-        name: file.name, 
-        storedAs: `${ts}_${safeName}`, 
-        url, 
-        ts 
+      const timestamp = Date.now();
+      const safeName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+      const fileRef = ref(storage, `patients/${uid}/reports/${timestamp}_${safeName}`);
+      
+      await uploadBytes(fileRef, file);
+      const url = await getDownloadURL(fileRef);
+      
+      // Add to Firestore
+      await addDoc(collection(db, 'patients', uid, 'reports'), {
+        name: file.name,
+        storagePath: fileRef.fullPath,
+        url,
+        uploadedAt: new Date(),
+        size: file.size,
+        type: file.type,
+        category: 'Uploaded Report',
+        status: 'available'
       });
-    } catch (_) {}
+      
+      // Update local state
+      setReports(prev => [{
+        name: file.name,
+        url,
+        fullPath: fileRef.fullPath,
+        uploadedAt: new Date().toISOString(),
+        category: 'Uploaded Report',
+        status: 'available'
+      }, ...prev]);
+      
+    } catch (error) {
+      console.error('Error uploading report:', error);
+      alert('Error uploading file. Please try again.');
+    }
   };
 
   const handleLogout = async () => {
     try {
       await logout();
       actions.setUser(null);
+      localStorage.removeItem('tl_user');
       navigate('/');
     } catch (error) {
       console.error('Logout error:', error);
     }
   };
 
-  const copyPatientId = () => {
-    navigator.clipboard.writeText(patientInfo.patientId);
-    alert('Patient ID copied to clipboard!');
-  };
+  const copyPatientId = (e) => {  // ✅ Accept event as parameter
+  navigator.clipboard.writeText(patientInfo.patientId)
+    .then(() => {
+      const originalText = e.target.innerHTML; 
+      e.target.innerHTML = '✓ Copied!';        
+      setTimeout(() => {
+        e.target.innerHTML = originalText;      
+      }, 2000);
+    })
+    .catch(err => {
+      console.error('Failed to copy: ', err);
+    });
+};
 
   const downloadQRCode = () => {
-    // Create QR code data with patient information
-    const qrData = {
-      patientId: patientInfo.patientId,
-      name: patientInfo.name,
-      dob: patientInfo.dob,
-      phone: patientInfo.phone,
-      emergencyContact: patientInfo.phone
-    };
+    if (!qrCodeUrl) {
+      alert('Please generate QR code first');
+      return;
+    }
     
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = 300;
-    canvas.height = 300;
-    
-    // Simple QR-like visual (you can integrate actual QR library here)
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, 300, 300);
-    ctx.fillStyle = '#fff';
-    ctx.font = '12px Arial';
-    ctx.fillText(`Patient ID: ${patientInfo.patientId}`, 10, 20);
-    ctx.fillText(`Name: ${patientInfo.name}`, 10, 40);
-    ctx.fillText(`QR Data: ${JSON.stringify(qrData)}`, 10, 60);
-    
-    // Convert to downloadable image
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `patient_qr_${patientInfo.patientId}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    });
+    const a = document.createElement('a');
+    a.href = qrCodeUrl;
+    a.download = `thejaslink-patient-${patientInfo.patientId}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
-  const containerVariants = {
-    hidden: { opacity: 0, y: 16 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } }
-  };
+  // Close profile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showProfileMenu && !event.target.closest('.profile-menu-container')) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showProfileMenu]);
 
   if (loading) {
     return (
-      <section className="min-h-[calc(100vh-4rem)] grid place-items-center py-12">
-        <motion.div 
-          className="w-10 h-10 border-2 border-brand-600 border-t-transparent rounded-full" 
-          animate={{ rotate: 360 }} 
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }} 
-        />
+      <section className="min-h-screen flex items-center justify-center py-12">
+        <div className="text-center">
+          <motion.div 
+            className="w-12 h-12 border-4 border-brand-600 border-t-transparent rounded-full mx-auto mb-4" 
+            animate={{ rotate: 360 }} 
+            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }} 
+          />
+          <p className="text-gray-600 dark:text-gray-400">Loading your health dashboard...</p>
+        </div>
+      </section>
+    );
+  }
+
+  // Error state
+  if (dataLoadError) {
+    return (
+      <section className="min-h-screen flex items-center justify-center py-12">
+        <div className="text-center max-w-md">
+          <div className="text-red-500 text-6xl mb-4">⚠️</div>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+            Unable to Load Dashboard
+          </h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-4">
+            {dataLoadError}
+          </p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
       </section>
     );
   }
 
   return (
-    <section className="min-h-[calc(100vh-4rem)] py-8">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        {/* Enhanced Top Bar */}
-        <div className="mb-6 bg-white/80 dark:bg-neutral-900/70 backdrop-blur rounded-xl border border-neutral-200 dark:border-neutral-800 p-4 sm:p-6">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <section className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Enhanced Header */}
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 p-6"
+        >
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
             <div className="flex-1">
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-brand-600 dark:text-brand-400 mb-2">
-                Welcome to ThejasLink, {patientInfo.name}
+              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white mb-2">
+                Welcome to ThejasLink, <span className="text-brand-600">{patientInfo.name}</span>
               </h1>
-              <div className="flex items-center gap-4 text-sm text-neutral-600 dark:text-neutral-400">
-                <div className="flex items-center gap-2">
-                  <User size={16} />
+              
+              <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600 dark:text-gray-400">
+                <div className="flex items-center gap-2 bg-brand-50 dark:bg-brand-900/20 px-3 py-1 rounded-full">
+                  <User size={16} className="text-brand-600" />
                   <span>Patient ID: </span>
                   <span className="font-mono font-semibold text-brand-600 dark:text-brand-400">
                     {patientInfo.patientId}
                   </span>
                   <button 
                     onClick={copyPatientId}
-                    className="text-brand-600 hover:text-brand-700 p-1"
+                    className="text-brand-600 hover:text-brand-700 p-1 rounded transition-colors"
                     title="Copy Patient ID"
                   >
                     <Copy size={14} />
                   </button>
                 </div>
+                
+                <div className="flex items-center gap-2">
+                  <span className="bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300 px-2 py-1 rounded text-xs font-medium">
+                    Active
+                  </span>
+                </div>
               </div>
             </div>
             
             <div className="flex items-center gap-3">
-              {/* Patient QR Code Button */}
+              {/* Mobile Menu Button */}
               <button
-                onClick={() => setShowQRModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg font-medium transition-colors"
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="lg:hidden p-2 rounded-lg border border-gray-200 dark:border-gray-700"
+              >
+                {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+              </button>
+
+              {/* QR Code Button */}
+              <button
+                onClick={() => {
+                  generateQRCode();
+                  setShowQRModal(true);
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg font-medium transition-colors shadow-sm"
               >
                 <QrCode size={18} />
-                <span className="hidden sm:inline">Patient QR Code</span>
+                <span className="hidden sm:inline">QR Code</span>
               </button>
 
               {/* Health Summary Button */}
@@ -318,175 +665,219 @@ export default function PatientDashboard() {
                 vaccinations={vaccinations} 
               />
 
-              {/* Profile Menu */}
-              <div className="relative">
+              {/* Profile Menu - FIXED */}
+              <div className="profile-menu-container relative">
                 <button
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
-                  className="flex items-center gap-2 px-4 py-2 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 rounded-lg transition-colors shadow-sm"
                 >
                   <User size={18} />
                   <span className="hidden sm:inline">Profile</span>
                 </button>
                 
                 {showProfileMenu && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-neutral-200 dark:border-neutral-700 z-50">
-                    <div className="p-3 border-b border-neutral-200 dark:border-neutral-700">
-                      <p className="font-medium text-sm">{patientInfo.name}</p>
-                      <p className="text-xs text-neutral-500">{patientInfo.email}</p>
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50"
+                  >
+                    <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+                      <p className="font-semibold text-sm text-gray-900 dark:text-white">{patientInfo.name}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{patientInfo.email}</p>
                     </div>
-                    <div className="py-2">
+                    <div className="py-1">
                       <button
                         onClick={() => {
                           setActive('personal');
                           setShowProfileMenu(false);
                         }}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-2"
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
                       >
                         <Settings size={16} />
                         Personal Details
                       </button>
                       <button
                         onClick={handleLogout}
-                        className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+                        className="w-full text-left px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2 transition-colors"
                       >
                         <LogOut size={16} />
                         Sign Out
                       </button>
                     </div>
-                  </div>
+                  </motion.div>
                 )}
               </div>
             </div>
           </div>
-        </div>
+        </motion.div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Sidebar */}
-          <aside className="lg:col-span-3">
-            <div className="rounded-xl soft-shadow border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/70 backdrop-blur p-3">
-              <nav className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-1 gap-2">
-                {sections.map((s) => (
+          {/* Sidebar - Enhanced for mobile */}
+          <aside className={`lg:col-span-3 ${mobileMenuOpen ? 'block' : 'hidden lg:block'}`}>
+            <motion.div 
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="rounded-2xl bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 p-4 sticky top-6"
+            >
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3 px-2">Navigation</h3>
+              <nav className="grid gap-1">
+                {sections.map((section) => (
                   <button
-                    key={s.key}
-                    onClick={() => setActive(s.key)}
-                    className={`text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors focus-ring ${
-                      active === s.key 
-                        ? 'bg-brand-600 text-white' 
-                        : 'bg-neutral-100 dark:bg-neutral-900 hover:bg-neutral-200/70 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-800'
+                    key={section.key}
+                    onClick={() => {
+                      setActive(section.key);
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`flex items-center gap-3 text-left px-3 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                      active === section.key
+                        ? 'bg-brand-600 text-white shadow-md'
+                        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent hover:border-gray-200 dark:hover:border-gray-600'
                     }`}
                   >
-                    {s.label}
+                    <span className="text-lg">{section.icon}</span>
+                    <span>{section.label}</span>
                   </button>
                 ))}
               </nav>
-            </div>
+            </motion.div>
           </aside>
 
-          {/* Content */}
+          {/* Main Content */}
           <div className="lg:col-span-9">
             <AnimatePresence mode="wait">
               <motion.div 
-                key={active} 
-                variants={containerVariants} 
-                initial="hidden" 
-                animate="visible" 
-                exit="hidden" 
-                className="rounded-xl soft-shadow border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/70 backdrop-blur p-4 sm:p-6"
+                key={active}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3 }}
+                className="rounded-2xl bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 p-6"
               >
                 {active === 'personal' && (
                   <PersonalDetails 
-                    profile={{
-                      ...profile,
-                      personalDetails: patientInfo.personalDetails,
-                      patientId: patientInfo.patientId
-                    }} 
+                    profile={profile} 
                     saving={saving} 
                     onUpdate={handleUpdateContact} 
                   />
                 )}
-                {active === 'medical' && (
-                  <MedicalHistory profile={profile} />
-                )}
+                {active === 'medical' && <MedicalHistory profile={profile} />}
                 {active === 'reports' && (
-                  <LabReports reports={reports} onUpload={handleReportUpload} />
+                  <LabReports 
+                    patientId={patientId}
+                    reports={reports} 
+                    onUpload={handleReportUpload} 
+                  />
                 )}
                 {active === 'prescriptions' && (
-                  <Prescriptions items={prescriptions} />
+                  <Prescriptions 
+                    patientId={patientId}
+                    items={prescriptions} 
+                  />
                 )}
-                {active === 'chronic' && (
-                  <ChronicTracker profile={profile} />
-                )}
+                {active === 'chronic' && <ChronicTracker profile={profile} />}
                 {active === 'appointments' && (
-                  <Appointments items={appointments} />
+                  <Appointments 
+                    patientId={patientId}
+                    items={appointments} 
+                  />
                 )}
                 {active === 'vaccinations' && (
-                  <Vaccinations items={vaccinations} />
+                  <Vaccinations 
+                    patientId={patientId}
+                    items={vaccinations} 
+                  />
                 )}
                 {active === 'notes' && (
-                  <DoctorNotes items={notes} />
+                  <DoctorNotes 
+                    patientId={patientId}
+                    items={notes} 
+                  />
                 )}
-                {active === 'emergency' && (
-                  <EmergencyInfo profile={profile} />
-                )}
+                {active === 'emergency' && <EmergencyInfo profile={profile} />}
                 {active === 'qrcode' && (
-                  <QRCodeSection uid={uid} patientId={patientInfo.patientId} />
+                  <QRCodeSection 
+                    uid={uid} 
+                    patientId={patientInfo.patientId}
+                    profile={profile}
+                    onGenerateQR={generateQRCode}
+                    qrCodeUrl={qrCodeUrl}
+                  />
                 )}
-                {active === 'nearby' && (
-                  <NearbyHospitals />
-                )}
+                {active === 'nearby' && <NearbyHospitals />}
               </motion.div>
             </AnimatePresence>
           </div>
         </div>
       </div>
 
-      {/* QR Code Modal */}
+      {/* Enhanced QR Code Modal */}
       {showQRModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+          onClick={() => setShowQRModal(false)}
+        >
           <motion.div 
-            className="bg-white dark:bg-neutral-900 rounded-xl p-6 max-w-md w-full"
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-center mb-4">
-              <h3 className="text-lg font-semibold mb-2">Patient QR Code</h3>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                This QR code contains your Patient ID and basic information
-              </p>
-            </div>
-            
-            <div className="bg-neutral-100 dark:bg-neutral-800 p-4 rounded-lg text-center mb-4">
-              <div className="w-32 h-32 bg-white border-2 border-dashed border-neutral-300 rounded-lg mx-auto flex items-center justify-center mb-3">
-                <QrCode size={48} className="text-neutral-400" />
+            <div className="p-6">
+              <div className="text-center mb-6">
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                  Patient QR Code
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Scan this code to access patient information
+                </p>
               </div>
-              <div className="text-sm space-y-1">
-                <p><strong>Patient ID:</strong> {patientInfo.patientId}</p>
-                <p><strong>Name:</strong> {patientInfo.name}</p>
-                <p><strong>Phone:</strong> {patientInfo.phone}</p>
+              
+              <div className="bg-gray-50 dark:bg-gray-700 p-6 rounded-xl text-center mb-6">
+                {qrCodeUrl ? (
+                  <img 
+                    src={qrCodeUrl} 
+                    alt="Patient QR Code" 
+                    className="w-48 h-48 mx-auto mb-4 rounded-lg shadow-md"
+                  />
+                ) : (
+                  <div className="w-48 h-48 mx-auto mb-4 bg-gray-200 dark:bg-gray-600 rounded-lg flex items-center justify-center">
+                    <QrCode size={48} className="text-gray-400" />
+                  </div>
+                )}
+                
+                <div className="space-y-2 text-sm">
+                  <p><strong>Patient ID:</strong> {patientInfo.patientId}</p>
+                  <p><strong>Name:</strong> {patientInfo.name}</p>
+                  <p><strong>Blood Group:</strong> {patientInfo.bloodGroup || 'Not set'}</p>
+                  <p><strong>System:</strong> ThejasLink Health Records</p>
+                </div>
               </div>
-            </div>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={downloadQRCode}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg transition-colors"
-              >
-                <Download size={16} />
-                Download
-              </button>
-              <button
-                onClick={() => setShowQRModal(false)}
-                className="flex-1 px-4 py-2 bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 rounded-lg transition-colors"
-              >
-                Close
-              </button>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={downloadQRCode}
+                  disabled={!qrCodeUrl}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-brand-600 hover:bg-brand-700 disabled:bg-gray-400 text-white rounded-lg transition-colors font-medium"
+                >
+                  <Download size={18} />
+                  Download
+                </button>
+                <button
+                  onClick={() => setShowQRModal(false)}
+                  className="flex-1 px-4 py-3 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-colors font-medium"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </motion.div>
-        </div>
+        </motion.div>
       )}
 
-      <div className="mt-10">
-        <Footer onEmergencyCall={() => alert('Dialing emergency number...')} />
+      <div className="mt-12">
+        <Footer onEmergencyCall={() => alert('Connecting to emergency services...')} />
       </div>
     </section>
   );
